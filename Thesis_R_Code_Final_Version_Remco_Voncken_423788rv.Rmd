@@ -1,0 +1,959 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+    
+    
+---
+Load Packages
+```{r}
+library(stargazer)
+library(corrplot)
+library(gplots)
+library(dplyr)
+library(ggplot2)
+library(car)
+library(plm)
+library(tidymodels)
+library(readr)
+library(stringr)
+library(tidyr)
+library(sqldf)
+library(data.table)
+library(caret)
+library(tidyverse)
+library(plyr)
+library(scales)
+library(glmnet)
+library(gsubfn)
+library(proto)
+library(rgl)
+library(outliers)
+library(doParallel)
+library(ranger)
+library(vip)
+library(BBmisc)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+```
+
+First the data downloaded from National animal nutrition program database is Loaded.
+```{r}
+# Load data ---------------------------------------------------------------
+Performance      <- read.csv("~/BAM/Thesis/Test USDA/Performance.csv")
+Performance      <- as.data.table(Performance)
+dietarynutrients <- read.csv("~/BAM/Thesis/Test USDA/dietarynutrients.csv")
+dietarynutrients <- as.data.table(dietarynutrients)
+subjects <- read.csv("~/BAM/Thesis/Test USDA/subjects.csv")
+subjects <- as.data.table(subjects)
+```
+
+
+###############################################################################
+Data Preparation
+##############################################################################
+
+Information regarding the subject data is filtered and a combined data table is created in which all the required variables are collected.
+```{r}
+# include subject information into one combined data table----------------------
+
+# create subject ID
+subjects$id <- paste(subjects$PubID,subjects$TrialID)
+subjects$id <- paste(subjects$id,subjects$TrtID)
+subjects$id <- paste(subjects$id,subjects$SubjectID)
+
+# Filter on Breed
+Subjects_breed <- subjects %>%
+  filter(VarName == "Subj_Breed")
+names(Subjects_breed)[7] <- "Breed"
+# Create a subset with only id and Breed
+Subjects_breed    <- subset(Subjects_breed, select = c(7,12))
+
+# Filter on sex
+Subjects_Sex <- subjects %>%
+  filter(VarName == "Subj_Sex")
+names(Subjects_Sex)[7] <- "Sex"
+# Create a subset with only id and Sex
+Subjects_Sex    <- subset(Subjects_Sex, select = c(7,12))
+# merge the subset with the combined data table
+dt.combined <- merge(Subjects_breed, Subjects_Sex, by="id")
+
+# Filter on LactDays
+Subjects_LactDays <- subjects %>%
+  filter(VarName == "Subj_LactDays")
+names(Subjects_LactDays)[7] <- "LactDays"
+# Create a subset with only id and LactDays
+Subjects_LactDays    <- subset(Subjects_LactDays, select = c(7,12))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, Subjects_LactDays, by="id")
+
+# Filter on PregDays
+Subjects_PregDays <- subjects %>%
+  filter(VarName == "Subj_PregDays")
+names(Subjects_PregDays)[7] <- "PregDays"
+# Create a subset with only id and PregDays
+Subjects_PregDays    <- subset(Subjects_PregDays, select = c(7,12))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, Subjects_PregDays, by="id")
+
+# make sure all numeric variables are set to numeric.
+dt.combined$LactDays <- as.numeric(dt.combined$LactDays)
+dt.combined$PregDays <- as.numeric(dt.combined$PregDays)
+```
+
+Information regarding the performance data is filtered and added to the combined data table in which all the required variables are collected.
+```{r}
+#Include subject performance data-----------------------------------------------
+
+# Filter on Milk Production
+Performance_Milk_prod    <- Performance[VarName == "Milk_Prod", ]
+names(Performance_Milk_prod)[12] <- "Milk_prod_quant_KG_d"
+# Create subject ID
+Performance_Milk_prod$id <- paste(Performance_Milk_prod$PubID,Performance_Milk_prod$TrialID)
+Performance_Milk_prod$id <- paste(Performance_Milk_prod$id,Performance_Milk_prod$TrtID)
+Performance_Milk_prod$id <- paste(Performance_Milk_prod$id,Performance_Milk_prod$SubjectID)
+# Create a subset with only id and Milk_prod_quant_KG_d
+Performance_Milk_prod    <- subset(Performance_Milk_prod, select = c(1,12))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, Performance_Milk_prod, by="id")
+
+# Filter on milk energy value
+Performance_energy    <- Performance[VarName == "Milk_NE", ]
+names(Performance_energy)[12] <- "Milk_Energy_Mcal_d"
+# Create subject ID
+Performance_energy$id <- paste(Performance_energy$PubID,Performance_energy$TrialID)
+Performance_energy$id <- paste(Performance_energy$id,Performance_energy$TrtID)
+Performance_energy$id <- paste(Performance_energy$id,Performance_energy$SubjectID)
+# Create a subset with only id and Milk_Energy_Mcal_d
+Performance_energy    <- subset(Performance_energy, select = c(1,12))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, Performance_energy, by="id")
+```
+
+Information regarding the performance data is filtered and added to the combined data table in which all the required variables are collected.
+```{r}
+# Include subject Dietarynutrients----------------------------------------------
+
+# Create subject ID
+dietarynutrients$id <- paste(dietarynutrients$PubID,dietarynutrients$TrialID)
+dietarynutrients$id <- paste(dietarynutrients$id,dietarynutrients$TrtID)
+dietarynutrients$id <- paste(dietarynutrients$id,dietarynutrients$SubjectID)
+
+# Create a subset that includes only the values of the dietary ingredients
+dietarynutrients<- subset(dietarynutrients, select = c(6:8,12))
+
+# Filter on acid detergent fiber
+nutrient_acid_detergent_fiber <- dietarynutrients[VarName == "Dt_ADF", ] 
+names(nutrient_acid_detergent_fiber)[2] <- "Acid_detergent_fiber_perc_DM"
+# Create a subset with only id and Acid detergent fiber
+nutrient_acid_detergent_fiber <- subset(nutrient_acid_detergent_fiber, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_acid_detergent_fiber, by="id")
+
+# Filter on dietary ash
+nutrient_ash <- dietarynutrients[VarName == "Dt_Ash", ]
+names(nutrient_ash)[2] <- "Ash_perc_DM"
+# Create a subset with only id and Ash
+nutrient_ash <- subset(nutrient_ash, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_ash, by="id")
+
+# Filter on crude protein
+nutrient_crude_protein <- dietarynutrients[VarName == "Dt_CP", ]
+names(nutrient_crude_protein)[2] <- "Crude_protein_perc_DM"
+# Create a subset with only id and Crude protein
+nutrient_crude_protein <- subset(nutrient_crude_protein, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_crude_protein, by="id")
+
+# Filter on cellulose
+nutrient_Cellulose <- dietarynutrients[VarName == "Dt_Cel", ]
+names(nutrient_Cellulose)[2] <- "Cellulose_perc_DM"
+# Create a subset with only id and cellulose
+nutrient_Cellulose <- subset(nutrient_Cellulose, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_Cellulose, by="id")
+
+# Filter on crude fiber
+nutrient_Crude_fiber <- dietarynutrients[VarName == "Dt_CF", ]
+names(nutrient_Crude_fiber)[2] <- "Crude_fiber_perc_DM"
+# Create a subset with only id and crude fiber
+nutrient_Crude_fiber <- subset(nutrient_Crude_fiber, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_Crude_fiber, by="id")
+
+# Filter on dry matter
+nutrient_dry_matter <- dietarynutrients[VarName == "Dt_DM", ]
+names(nutrient_dry_matter)[2] <- "Dry_matter_g_d"
+# Create a subset with only id and dry matter consumption
+nutrient_dry_matter <- subset(nutrient_dry_matter, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_dry_matter, by="id")
+
+# Filter on hemicellulose
+nutrient_Hemicellulose <- dietarynutrients[VarName == "Dt_HC", ] 
+names(nutrient_Hemicellulose)[2] <- "Hemicellulose_perc_DM"
+# Create a subset with only id and hemicellulose
+nutrient_Hemicellulose <- subset(nutrient_Hemicellulose, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_Hemicellulose, by="id")
+
+# Filter on lignin
+nutrient_lignin <- dietarynutrients[VarName == "Dt_Lig", ] 
+names(nutrient_lignin)[2] <- "lignin_perc_DM"
+# Create a subset with only id and lingin
+nutrient_lignin <- subset(nutrient_lignin, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_lignin, by="id")
+
+
+# Filter on Neutral detergent fiber
+nutrient_neutral_detergent_fiber <- dietarynutrients[VarName == "Dt_NDF", ] 
+names(nutrient_neutral_detergent_fiber)[2] <- "Neutral_detergent_fiber_perc_DM"
+# Create a subset with only id and Neutral detergent fiber
+nutrient_neutral_detergent_fiber <- subset(nutrient_neutral_detergent_fiber, select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_neutral_detergent_fiber, by="id")
+
+
+# Filter on Crude fat
+nutrient_fat <- dietarynutrients[VarName == "Dt_EE", ] 
+names(nutrient_fat)[2] <- "Crude_Fat_perc_DM"
+# Create a subset with only id and organic matter
+nutrient_fat  <- subset(nutrient_fat , select = c(4,2))
+# merge the subset with the combined data table
+dt.combined <- merge(dt.combined, nutrient_fat, by="id")
+
+```
+
+Cleaning and feature selection.
+
+All data entries with a negative value are removed from the data set. 
+These are likely to be entry errors since a animal cannot eat a negative amount 
+of a nutritional ingredient. Also the single steer that is included is removed 
+from the data set since this observation is not comparable to the rest of the 
+data entries. The data set contains a couple of cows that have been in lactation
+a long time. Research suggests that a full lactation cycle ideally takes around
+year including the dry period. In practice the cycle can take a somewhat longer.
+Because of this outliers that are in lactation longer than a year are removed
+from the data set. There are three different breeds represented in the data set
+namely Holstein, Jersey and Angus x hereford. These are not distributed equally
+with most of the cows being Holstein cows. Since different breeds could have 
+different nutritional requirements only Holstein cows are considered within
+this research.
+```{r}
+#Clean data
+
+# remove negative nutritional values
+dt.combined <- dt.combined[dt.combined$Ash_perc_DM >=0,]
+dt.combined <- dt.combined[dt.combined$Crude_Fat_perc_DM >=0,]
+dt.combined <- dt.combined[dt.combined$Hemicellulose_perc_DM >=0,]
+dt.combined <- dt.combined[dt.combined$lignin_perc_DM >=0,]
+
+
+# remove cows that have been in lactation longer than a year
+dt.combined <- dt.combined%>%
+  filter(LactDays < 366)
+
+# remove steer
+dt.combined <- dt.combined%>%
+  filter(Sex == "Female")
+
+# Select only Holstein cows
+dt.combined <- dt.combined%>%
+  filter(Breed == "Holstein")
+
+#count individual unique
+Subject_id <- subset(subjects, select = c(5,12))
+dt.combined_individual_cows <- merge(Subject_id, dt.combined, by="id")
+dt.combined_individual_cows$SubjectID <- as.numeric(dt.combined_individual_cows$SubjectID)
+dt.combined_individual_cows <- unique(dt.combined_individual_cows$SubjectID)
+```
+
+
+###############################################################################
+Data exploration
+##############################################################################
+
+Stargazer is used to get a good summary of the overall data set
+```{r}
+stargazer(dt.combined, type = "latex")
+stargazer(dt.combined, type = "text")
+```
+
+Distribution of Milk production
+```{r}
+#histogram distribution milk production
+hist(dt.combined$Milk_prod_quant_KG_d,
+     xlab = "Milk production per cow in Kg per day",
+     main = "Distribution of milk production",
+     breaks = sqrt(nrow(dt.combined))
+)
+```
+
+Distribution of nutritional component values
+```{r}
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$Acid_detergent_fiber_perc_DM,
+     xlab = "Percentage of Acid detergent fiber in dry matter",
+     main = "Distribution of Acid detergent fiber level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of Ash percentage in DM
+hist(dt.combined$Ash_perc_DM,
+     xlab = "Percentage of Ash in dry matter",
+     main = "Distribution of Ash level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$Crude_protein_perc_DM,
+     xlab = "Percentage of Crude protein in dry matter",
+     main = "Distribution of Crude protein level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$Crude_protein_perc_DM,
+     xlab = "Percentage of Crude fiber in dry matter",
+     main = "Distribution of Crude fiber level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$Cellulose_perc_DM,
+     xlab = "Percentage of cellulose in dry matter",
+     main = "Distribution of cellulose level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$Hemicellulose_perc_DM,
+     xlab = "Percentage of hemicellulose in dry matter",
+     main = "Distribution of hemicellulose level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$lignin_perc_DM,
+     xlab = "Percentage of lignin in dry matter",
+     main = "Distribution of lignin level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$Neutral_detergent_fiber_perc_DM,
+     xlab = "Percentage of neutral detergent fiber in dry matter",
+     main = "Distribution of neutral detergent fiber level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution of acid detergent fiber percentage in DM
+hist(dt.combined$Crude_Fat_perc_DM,
+     xlab = "Percentage of crude fat in dry matter",
+     main = "Distribution of crude fat level in Dairy feed",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+```
+
+A normalized version of the data set is create in order to better compare the
+effects of different nutritional values.
+```{r}
+dt.combined_normalized <- normalize(dt.combined)
+```
+
+Create data table with only percentage of dry matter ingredients
+```{r}
+dt.nutrient_perc_DM <- subset(dt.combined_normalized, select = c(Milk_prod_quant_KG_d, Acid_detergent_fiber_perc_DM,Ash_perc_DM,Crude_protein_perc_DM,Crude_fiber_perc_DM, Cellulose_perc_DM,Hemicellulose_perc_DM,lignin_perc_DM, Neutral_detergent_fiber_perc_DM,  Crude_Fat_perc_DM))
+```
+
+OLS regression of Model 1 which includes only variables that are gives as a 
+percentage of the dry matter.
+```{r}
+#OLS Regression with all nutrient variables
+OLS_nutrient_variables <- lm(Milk_prod_quant_KG_d ~ ., data = dt.nutrient_perc_DM)
+stargazer(OLS_nutrient_variables, type = "latex")
+stargazer(OLS_nutrient_variables, type = "text")
+
+```
+
+Correlation of significant variables within the feed
+```{r}
+Corr_crude_fiber <- ggplot(dt.combined, aes(x = Crude_fiber_perc_DM, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Crude fiber percentage in Dry Matter") +
+  ylab("Milk production")
+Corr_crude_fiber
+
+Corr_neutral_detergent_fiber <- ggplot(dt.combined, aes(x = Neutral_detergent_fiber_perc_DM, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Neutral Detergent fiber percentage in Dry Matter") +
+  ylab("Milk production")
+Corr_neutral_detergent_fiber
+
+Corr_Crude_fat <- ggplot(dt.combined, aes(x = Crude_Fat_perc_DM, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Crude fat percentage in dry matter") +
+  ylab("Milk production")
+Corr_Crude_fat
+
+Corr_Crude_protein <- ggplot(dt.combined, aes(x = Crude_protein_perc_DM, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Crude protein percentage in dry matter") +
+  ylab("Milk production")
+Corr_Crude_protein
+
+Corr_hemicellulose <- ggplot(dt.combined, aes(x = Hemicellulose_perc_DM, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Hemicellulose percentage in dry matter") +
+  ylab("Milk production")
+Corr_hemicellulose
+
+Corr_acid_detergent_fiber <- ggplot(dt.combined, aes(x = Acid_detergent_fiber_perc_DM, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Acid Detergent fiber percentage in Dry Matter") +
+  ylab("Milk production")
+Corr_acid_detergent_fiber
+
+
+```
+
+OLS regression of Model 2 which includes all available variables.
+```{r}
+#OLS Regression with all variables
+dt.combined_ols <- select(dt.combined,4:17)
+OLS_all_variables <- lm(Milk_prod_quant_KG_d ~ . , data = dt.combined_ols)
+stargazer(OLS_nutrient_variables, OLS_all_variables, type = "latex")
+
+dt.combined_ols_normalized <- select(dt.combined_normalized,4:17)
+OLS_all_variables_normalized <- lm(Milk_prod_quant_KG_d ~ . , data = dt.combined_ols_normalized)
+stargazer(OLS_all_variables_normalized, type = "text")
+```
+
+Correlation between Milk production and significant Variables
+```{r}
+# Correlation between Milk production and days in pregnancy
+Corr_PregDays <- ggplot(dt.combined, aes(x = PregDays, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Days is pregnancy") +
+  ylab("Milk production")
+Corr_PregDays
+
+# Correlation between Milk production and days in Milk
+Corr_LactDays <- ggplot(dt.combined, aes(x = LactDays, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Days in Lactation") +
+  ylab("Milk production")
+Corr_LactDays
+
+# Correlation between Milk production and net energy level
+Corr_Energy <- ggplot(dt.combined, aes(x = Milk_Energy_Mcal_d, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Energy level for milk production in Mcal per day") +
+  ylab("Milk production")
+Corr_Energy
+
+# Correlation between Milk production and Dry matter intake
+Corr_Dry_matter <- ggplot(dt.combined, aes(x = Dry_matter_g_d, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Dry matter intake") +
+  ylab("Milk production")
+Corr_Dry_matter
+
+Corr_Ash <- ggplot(dt.combined, aes(x = Ash_perc_DM, y = Milk_prod_quant_KG_d)) +
+  geom_point() + geom_smooth(se = FALSE) + theme_minimal() +
+  xlab("Ash percentage in Dry Matter") +
+  ylab("Milk production")
+Corr_Ash
+```
+
+Random forest regression in order to determine the importance of the variables
+included in model 1.
+```{r}
+#Splitting the data into a training and test set
+set.seed(2020)
+data_split <- initial_split(data = dt.nutrient_perc_DM, prop = 0.7, 
+                          strata = Milk_prod_quant_KG_d)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+#10-fold cross validation
+set.seed(2020)
+cv_folds <- vfold_cv(data_train, v = 10)
+
+#Setting up the recipe
+#str(data_train)
+rf_recipe <- recipe(Milk_prod_quant_KG_d ~ ., data = data_train) 
+rf_recipe
+
+#Specify the random forest model with 1500 trees
+tune_spec <- rand_forest(mtry = tune(), trees = 1500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+#Setting up the workflow
+tune_wf <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(tune_spec)
+tune_wf
+
+#Determine the metrics used
+class_metrics <- metric_set(mae, rmse, rsq_trad)
+registerDoParallel()
+
+#Setting up the grid
+set.seed(2020)
+tune_res <- tune_grid(
+  tune_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:12),
+  metrics = class_metrics
+)
+tune_res
+
+tune_res %>%
+  collect_metrics()
+
+#Plotting the results of MAE, RMSE and R squared
+tune_res %>%
+  collect_metrics() %>%
+  ggplot(aes(x = mtry, y = mean)) +
+  geom_point() + geom_line() +
+  facet_wrap(~ .metric, scales = "free_y") + theme_bw()
+
+#Selecting the best model based on the MAE
+best_mae <- select_best(tune_res, "mae")
+best_mae
+final_rf <- finalize_workflow(tune_wf, best_mae)
+
+#Setting up the final workflow
+set.seed(2020)
+final_res <- final_rf %>%
+  last_fit(data_split, metrics = class_metrics)
+
+#Collecting the metrics
+rf_metrics <- final_res %>%
+  collect_metrics()
+rf_metrics
+
+plot_final_rf <- finalize_model(
+  tune_spec,
+  best_mae
+)
+#Plotting the variable important scores
+plot_final_rf <- plot_final_rf %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  fit(Milk_prod_quant_KG_d ~ ., data = juice(prep(rf_recipe))) %>% vip(geom = "point") + theme_bw()
+plot_final_rf
+plot_final_rf[[1]][[2]]
+```
+
+Random forest regression in order to determine the importance of the variables
+included in model 2.
+```{r}
+#normalize dt.combined
+dt.combined_All_variables <- subset(dt.combined[,4:17])
+dt.combined_All_variables <- normalize(dt.combined_All_variables)
+
+#Splitting the data into a training and test set
+set.seed(2020)
+data_split <- initial_split(data = dt.combined_All_variables, prop = 0.7, 
+                          strata = Milk_prod_quant_KG_d)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+#10-fold cross validation
+set.seed(2020)
+cv_folds <- vfold_cv(data_train, v = 10)
+
+
+#Setting up the recipe
+#str(data_train)
+rf_recipe <- recipe(Milk_prod_quant_KG_d ~ ., data = data_train) #%>% update_role(rownames, new_role = "ID")
+rf_recipe
+
+#Specify the random forest model with 1500 trees
+tune_spec <- rand_forest(mtry = tune(), trees = 1500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+#Setting up the workflow
+tune_wf <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(tune_spec)
+tune_wf
+
+#Determine the metrics used
+class_metrics <- metric_set(mae, rmse, rsq_trad)
+registerDoParallel()
+
+#Setting up the grid
+set.seed(2020)
+tune_res <- tune_grid(
+  tune_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:12),
+  metrics = class_metrics
+)
+tune_res
+
+tune_res %>%
+  collect_metrics()
+
+#Plotting the results of MAE, RMSE and R squared
+tune_res %>%
+  collect_metrics() %>%
+  ggplot(aes(x = mtry, y = mean)) +
+  geom_point() + geom_line() +
+  facet_wrap(~ .metric, scales = "free_y") + theme_bw()
+
+
+
+#Selecting the best model based on the MAE
+best_mae <- select_best(tune_res, "mae")
+best_mae
+final_rf <- finalize_workflow(tune_wf, best_mae)
+
+#Setting up the final workflow
+set.seed(2020)
+final_res <- final_rf %>%
+  last_fit(data_split, metrics = class_metrics)
+
+#Collecting the metrics
+rf_metrics <- final_res %>%
+  collect_metrics()
+rf_metrics
+
+plot_final_rf <- finalize_model(
+  tune_spec,
+  best_mae
+)
+
+#Plotting the variable important scores
+plot_final_rf <- plot_final_rf %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  fit(Milk_prod_quant_KG_d ~ ., data = juice(prep(rf_recipe))) %>% vip(geom = "point") + theme_bw()
+plot_final_rf
+plot_final_rf[[1]][[2]]
+
+```
+
+
+Create subsets based on the phase of lactation. All overservations with a Lactsdays
+value lower than 101 are classified as early lactation. Observations ith a 
+Lactdays value ranging from 101 to 200 are classified as mid-lactation. Observations
+with a LactDays value higher than 200 will be classified as late-lactation.
+```{r}
+# create subset of cows that are in early lactation
+dt.combined_early_lactation <- dt.combined %>%
+  filter(LactDays < 101)
+
+# select only the nutritional values given as a percentage of the dry matter
+dt.nutrient_early_lactation <- subset(dt.combined_early_lactation, select = c(Milk_prod_quant_KG_d, Acid_detergent_fiber_perc_DM,Ash_perc_DM,Crude_protein_perc_DM,Crude_fiber_perc_DM, Cellulose_perc_DM,Hemicellulose_perc_DM,lignin_perc_DM, Neutral_detergent_fiber_perc_DM, Crude_Fat_perc_DM))
+
+# normalize data frame
+dt.nutrient_early_lactation_normalized <- normalize(dt.nutrient_early_lactation)
+
+# create subset of cows that are in early in mid-lactation
+dt.combined_mid_lactation <- dt.combined %>%
+  filter(LactDays > 100 & LactDays < 201)
+
+dt.nutrient_mid_lactation <- subset(dt.combined_mid_lactation, select = c(Milk_prod_quant_KG_d, Acid_detergent_fiber_perc_DM,Ash_perc_DM,Crude_protein_perc_DM,Crude_fiber_perc_DM, Cellulose_perc_DM,Hemicellulose_perc_DM,lignin_perc_DM, Neutral_detergent_fiber_perc_DM,  Crude_Fat_perc_DM))
+
+# normalize data frame
+dt.nutrient_mid_lactation_normalized <- normalize(dt.nutrient_mid_lactation)
+
+# create subset of cows that are in early in mid-lactation
+dt.combined_late_lactation <- dt.combined %>%
+  filter(LactDays > 201)
+
+dt.nutrient_late_lactation <- subset(dt.combined_late_lactation, select = c(Milk_prod_quant_KG_d, Acid_detergent_fiber_perc_DM,Ash_perc_DM,Crude_protein_perc_DM,Crude_fiber_perc_DM, Cellulose_perc_DM,Hemicellulose_perc_DM,lignin_perc_DM, Neutral_detergent_fiber_perc_DM,  Crude_Fat_perc_DM))
+
+# normalize data frame
+dt.nutrient_late_lactation_normalized <- normalize(dt.nutrient_late_lactation)
+```
+
+
+Distribution of milk production in different lactation phases.
+```{r}
+#histogram distribution milk production for cows in early lactation
+hist(dt.nutrient_early_lactation$Milk_prod_quant_KG_d,
+     xlab = "Milk production per cow in Kg per day",
+     main = "Distribution of milk production during the early lactation phase",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+#histogram distribution milk production for cows in mid-lactation
+hist(dt.nutrient_mid_lactation$Milk_prod_quant_KG_d,
+     xlab = "Milk production per cow in Kg per day",
+     main = "Distribution of milk production during the mid-lactation phase",
+     breaks = sqrt(nrow(dt.combined))
+)
+
+
+#histogram distribution milk production for cows in late lactation
+hist(dt.nutrient_late_lactation$Milk_prod_quant_KG_d,
+     xlab = "Milk production per cow in Kg per day",
+     main = "Distribution of milk production during the late lactation phase",
+     breaks = sqrt(nrow(dt.combined))
+)
+```
+
+
+Random forest regression in order to determine the importance of the variables
+included in model 1 for cows that are in early lactation.
+```{r}
+#Splitting the data into a training and test set
+set.seed(2020)
+data_split <- initial_split(data = dt.nutrient_early_lactation_normalized, prop = 0.7, 
+                          strata = Milk_prod_quant_KG_d)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+#10-fold cross validation
+set.seed(2020)
+cv_folds <- vfold_cv(data_train, v = 10)
+
+
+#Setting up the recipe
+#str(data_train)
+rf_recipe <- recipe(Milk_prod_quant_KG_d ~ ., data = data_train) #%>% update_role(rownames, new_role = "ID")
+rf_recipe
+
+#Specify the random forest model with 1500 trees
+tune_spec <- rand_forest(mtry = tune(), trees = 1500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+#Setting up the workflow
+tune_wf <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(tune_spec)
+tune_wf
+
+#Determine the metrics used
+class_metrics <- metric_set(mae, rmse, rsq_trad)
+registerDoParallel()
+
+#Setting up the grid
+set.seed(2020)
+tune_res <- tune_grid(
+  tune_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:12),
+  metrics = class_metrics
+)
+tune_res
+
+tune_res %>%
+  collect_metrics()
+
+#Plotting the results of MAE, RMSE and R squared
+tune_res %>%
+  collect_metrics() %>%
+  ggplot(aes(x = mtry, y = mean)) +
+  geom_point() + geom_line() +
+  facet_wrap(~ .metric, scales = "free_y") + theme_bw()
+
+
+#Selecting the best model based on the MAE
+best_mae <- select_best(tune_res, "mae")
+best_mae
+final_rf <- finalize_workflow(tune_wf, best_mae)
+
+#Setting up the final workflow
+set.seed(2020)
+final_res <- final_rf %>%
+  last_fit(data_split, metrics = class_metrics)
+
+#Collecting the metrics
+rf_metrics <- final_res %>%
+  collect_metrics()
+rf_metrics
+
+plot_final_rf <- finalize_model(
+  tune_spec,
+  best_mae
+)
+
+#Plotting the variable important scores
+plot_final_rf <- plot_final_rf %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  fit(Milk_prod_quant_KG_d ~ ., data = juice(prep(rf_recipe))) %>% vip(geom = "point") + theme_bw()
+plot_final_rf
+plot_final_rf[[1]][[2]]
+```
+
+Random forest regression in order to determine the importance of the variables
+included in model 1 for cows that are in mid lactation.
+```{r}
+#Splitting the data into a training and test set
+set.seed(2020)
+data_split <- initial_split(data = dt.nutrient_mid_lactation_normalized, prop = 0.7, 
+                          strata = Milk_prod_quant_KG_d)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+#10-fold cross validation
+set.seed(2020)
+cv_folds <- vfold_cv(data_train, v = 10)
+
+
+#Setting up the recipe
+#str(data_train)
+rf_recipe <- recipe(Milk_prod_quant_KG_d ~ ., data = data_train) #%>% update_role(rownames, new_role = "ID")
+rf_recipe
+
+#Specify the random forest model with 1500 trees
+tune_spec <- rand_forest(mtry = tune(), trees = 1500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+#Setting up the workflow
+tune_wf <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(tune_spec)
+tune_wf
+
+#Determine the metrics used
+class_metrics <- metric_set(mae, rmse, rsq_trad)
+registerDoParallel()
+
+#Setting up the grid
+set.seed(2020)
+tune_res <- tune_grid(
+  tune_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:12),
+  metrics = class_metrics
+)
+tune_res
+
+tune_res %>%
+  collect_metrics()
+
+#Plotting the results of MAE, RMSE and R squared
+tune_res %>%
+  collect_metrics() %>%
+  ggplot(aes(x = mtry, y = mean)) +
+  geom_point() + geom_line() +
+  facet_wrap(~ .metric, scales = "free_y") + theme_bw()
+
+
+#Selecting the best model based on the MAE
+best_mae <- select_best(tune_res, "mae")
+best_mae
+final_rf <- finalize_workflow(tune_wf, best_mae)
+
+#Setting up the final workflow
+set.seed(2020)
+final_res <- final_rf %>%
+  last_fit(data_split, metrics = class_metrics)
+
+#Collecting the metrics
+rf_metrics <- final_res %>%
+  collect_metrics()
+rf_metrics
+
+plot_final_rf <- finalize_model(
+  tune_spec,
+  best_mae
+)
+
+#Plotting the variable important scores
+plot_final_rf <- plot_final_rf %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  fit(Milk_prod_quant_KG_d ~ ., data = juice(prep(rf_recipe))) %>% vip(geom = "point") + theme_bw()
+plot_final_rf
+plot_final_rf[[1]][[2]]
+```
+
+Random forest regression in order to determine the importance of the variables
+included in model 1 for cows that are in late lactation.
+```{r}
+#Splitting the data into a training and test set
+set.seed(2020)
+data_split <- initial_split(data = dt.nutrient_late_lactation_normalized, prop = 0.7, 
+                          strata = Milk_prod_quant_KG_d)
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+#10-fold cross validation
+set.seed(2020)
+cv_folds <- vfold_cv(data_train, v = 10)
+
+
+#Setting up the recipe
+#str(data_train)
+rf_recipe <- recipe(Milk_prod_quant_KG_d ~ ., data = data_train) #%>% update_role(rownames, new_role = "ID")
+rf_recipe
+
+#Specify the random forest model with 1500 trees
+tune_spec <- rand_forest(mtry = tune(), trees = 1500) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+#Setting up the workflow
+tune_wf <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(tune_spec)
+tune_wf
+
+#Determine the metrics used
+class_metrics <- metric_set(mae, rmse, rsq_trad)
+registerDoParallel()
+
+#Setting up the grid
+set.seed(2020)
+tune_res <- tune_grid(
+  tune_wf,
+  resamples = cv_folds,
+  grid = tibble(mtry = 1:12),
+  metrics = class_metrics
+)
+tune_res
+
+tune_res %>%
+  collect_metrics()
+
+#Plotting the results of MAE, RMSE and R squared
+tune_res %>%
+  collect_metrics() %>%
+  ggplot(aes(x = mtry, y = mean)) +
+  geom_point() + geom_line() +
+  facet_wrap(~ .metric, scales = "free_y") + theme_bw()
+
+
+#Selecting the best model based on the MAE
+best_mae <- select_best(tune_res, "mae")
+best_mae
+final_rf <- finalize_workflow(tune_wf, best_mae) 
+
+#Setting up the final workflow
+set.seed(2020)
+final_res <- final_rf %>%
+  last_fit(data_split, metrics = class_metrics)
+
+#Collecting the metrics
+rf_metrics <- final_res %>%
+  collect_metrics()
+rf_metrics
+
+plot_final_rf <- finalize_model(
+  tune_spec,
+  best_mae
+)
+
+#Plotting the variable important scores
+plot_final_rf <- plot_final_rf %>% 
+  set_engine("ranger", importance = "permutation") %>% 
+  fit(Milk_prod_quant_KG_d ~ ., data = juice(prep(rf_recipe))) %>% vip(geom = "point") + theme_bw()
+plot_final_rf
+plot_final_rf[[1]][[2]]
+```
+
+
